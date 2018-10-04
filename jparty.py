@@ -6,6 +6,7 @@ from yeelight import *
 import requests
 from timeit import Timer
 import time
+import socket
 
 #from .utils import _clamp
 
@@ -22,6 +23,7 @@ ip = None
 bulbs = discover_bulbs()
 print(bulbs)
 ip = bulbs[0]['ip']
+Bulb.set_music = True
 
 PORT = 8080
 SPOTIPY_CLIENT_ID = "40673f62ed1d44b387160bf9e82a2de1"
@@ -34,9 +36,10 @@ SPOTIPY_PLAYLIST_API = "https://api.spotify.com/v1/playlists/{1IAY7B3G3MKO9Pre7c
 sp_oauth = oauth2.SpotifyOAuth(SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, SPOTIPY_REDIRECT_URI, scope=SCOPE,
                                cache_path=CACHE)
 
-access_token = 'BQAYWd_8-rEVx-Hk6nm980gQqAcf7JKwenUcIqLOQRPQr6NkdBIcRR-p0coS3TDPztaYWlBLZpu8FAXQ6og4L-1o1e8kB9FlnZ4dybOEbliLaDxd_lKV452elsBgx_PIWF3OJIRMtHJiwVoeVKdFtP7PBDxYFAHev-Qb6W8su-X4Sd4aXHTdGTbXTmr_f8hlc0fKQrc'
+access_token = 'BQAMT3Gzj-Is0XLxfWJCd4ymP90hVSfpqW35LYeNsGv2Pci8MBXkV_0oXSWE7MhdsxiJmBmca0U-Od8psKTHn22aeqKHWly3TzObOOAXv0zfAo_6cwQ2c4TGuT9stJrsLCWOjGp7MfoGsg4aNHamS4i9Y5FChExPe7B00xfVaVnngp9udJQiSerbJiPXuJz4wvXJopg'
 
 sp = spotipy.Spotify(access_token)
+
 
 # this will read current player and get the the tempo, duration, song id, and if the song is currently playing
 def getsong():
@@ -60,12 +63,16 @@ def getsong():
     audiofeat = sp.audio_features(song)
     duration = (audiofeat[0]['duration_ms'])
 
+    energy = 0
+    audiofeat = sp.audio_features(song)
+    energy = (audiofeat[0]['energy'])
+
     merge = []
     merge.append(playing)
     merge.append(tempo)
     merge.append(duration)
     merge.append(song)
-    merge.append('Placeholder')
+    merge.append(energy)
 
     return jsonify(merge)
 
@@ -101,6 +108,108 @@ def startsong():
 
     sp.seek_track(0, device_id='283ff0b54ce659c556ce668980058488f56ed873')
     sp.start_playback(device_id='283ff0b54ce659c556ce668980058488f56ed873')
+
+def double():
+
+    bpm = tempo() * 2
+    duration = int(60000 / bpm)
+    transitions = [
+        HSVTransition(0, 100, duration=duration, brightness=100),
+        HSVTransition(0, 100, duration=duration, brightness=1),
+        HSVTransition(90, 100, duration=duration, brightness=100),
+        HSVTransition(90, 100, duration=duration, brightness=1),
+        HSVTransition(180, 100, duration=duration, brightness=100),
+        HSVTransition(180, 100, duration=duration, brightness=1),
+        HSVTransition(270, 100, duration=duration, brightness=100),
+        HSVTransition(270, 100, duration=duration, brightness=1),
+    ]
+    bulb = Bulb(ip)
+    flow = Flow(
+        count=0,  # Cycle forever.
+        transitions=transitions
+    )
+
+    bulb.start_flow(flow)
+
+def advanced():
+    playback = sp.current_playback()
+    isplaying = playback['is_playing']
+    songid = playback['item']['uri']
+    song = str(songid)
+    analysis = sp.audio_analysis(song)
+
+    beats = analysis['beats']
+    start = analysis['beats'][0]['start']
+    beats = list(map(lambda item: item["duration"], beats))
+    beats.insert(0, start)
+
+    return beats
+
+
+def half():
+    bulb = Bulb
+    duration = advanced()
+    length = len(duration)
+    while length >=1:
+
+        if not duration:
+            break
+
+        bulb = Bulb(ip,effect='smooth', duration = duration[0])
+        bulb.set_rgb(255,0,0)
+        bulb.turn_on()
+        duration.pop(0)
+
+        bulb = Bulb(ip, effect='smooth', duration=duration[0])
+        bulb.turn_off()
+        duration.pop(0)
+
+        bulb = Bulb(ip, effect='smooth', duration=duration[0])
+        bulb.set_rgb(0,255,0)
+        bulb.turn_on()
+        duration.pop(0)
+        bulb.turn_off()
+        duration.pop(0)
+
+
+def duration():
+    playback = sp.current_playback()
+    songid = playback['item']['uri']
+    song = str(songid)
+    audiofeat = sp.audio_features(song)
+    duration = (audiofeat[0]['duration_ms'])
+    return duration
+
+def keepgoing():
+    getsong()
+
+    timer()
+
+
+
+def timer():
+    d = duration()
+    d = (d / 1000)
+    print(d)
+    time.sleep(d)
+    keepgoing()
+    return getsong()
+
+@app.route('/analyse')
+def analyse():
+    playback = sp.current_playback()
+    isplaying = playback['is_playing']
+    songid = playback['item']['uri']
+    song = str(songid)
+    analysis = sp.audio_analysis(song)
+
+    beats = analysis['beats']
+    start = analysis['beats'][0]['start']
+    beats = list(map(lambda item: item["duration"], beats))
+    beats.insert(0, start)
+
+    return jsonify(beats)
+
 
 @app.route('/refresh')
 def refresh():
@@ -152,6 +261,25 @@ def disco():
     bulb.start_flow(flow)
 
     return jsonify({'status': 'OK'})
+
+@app.route("/reset")
+def reset():
+
+   if ip is None:
+       return jsonify({'status': 'error', 'message': 'no bulb found'})
+
+   bulb = Bulb(ip)
+
+   try:
+
+       bulb.set_rgb(255, 255, 255)
+
+
+   except:
+       return jsonify({'status': 'error', 'message': 'could not adjust brightness'})
+
+   return jsonify({'status': 'OK'})
+
 
 @app.route("/party")
 def party():
@@ -243,12 +371,31 @@ def lsd(duration=3000, brightness=100):
 
 @app.route('/start')
 def start():
-    try:
-        pauseback()
-    except:
-        getsong()
-        startsong()
-        disco()
+
+    nextsong()
+    getsong()
+    disco()
     return getsong()
+
+@app.route('/next')
+def next():
+    nextsong()
+
+@app.route('/doubletime')
+def doubletime():
+    nextsong()
+    getsong()
+    double()
+    return getsong()
+
+@app.route('/test')
+def test():
+
+    nextsong()
+    getsong()
+    half()
+    return getsong()
+
 if __name__ == "__main__":
     app.run(debug=True, port=PORT)
+
